@@ -1,6 +1,6 @@
 {
   "name": "@ohg0219/milog",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Browse structured CloudWatch JSON logs in your browser — OpenTelemetry spans, trace trees, and error timelines.",
   "author": "hayden",
   "keywords": [
@@ -15,9 +15,14 @@
     "log4j2"
   ],
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/ohg0219/milog.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ohg0219/milog.git"
+  },
   "homepage": "https://github.com/ohg0219/milog#readme",
-  "bugs": { "url": "https://github.com/ohg0219/milog/issues" },
+  "bugs": {
+    "url": "https://github.com/ohg0219/milog/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
