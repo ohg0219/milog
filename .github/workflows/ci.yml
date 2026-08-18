@@ -1,0 +1,61 @@
+# 커밋마다 테스트하고, package.json 의 version 이 레지스트리와 다를 때만 배포한다.
+#
+# 왜 커밋마다 배포하지 않나 — 이 패키지는 설치된 PC 에서 **스스로 새 버전을 설치한다.**
+# 커밋 하나가 그대로 동료들 기계에 깔리므로, 배포는 사람이 version 을 올리는
+# 의도적인 행위일 때만 일어나야 한다. 버전 번호도 npm 에서 영구 소모품이다.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+
+  publish:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      # Trusted Publishing (OIDC) 에 필요. 이게 있어서 npm 토큰을 secret 으로
+      # 저장하지 않아도 된다 — 저장한 토큰은 새어 나갈 수 있다.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted Publishing 은 npm 11.5.1 이상을 요구한다. Node 22 에 딸려 오는 건 10.x 다.
+      - run: npm install -g npm@latest
+
+      - name: 배포할 버전인지 확인
+        id: check
+        run: |
+          LOCAL=$(node -p "require('./package.json').version")
+          NAME=$(node -p "require('./package.json').name")
+          # 아직 한 번도 안 올라간 버전이면 npm view 가 실패한다 — 그때가 배포할 때다.
+          REMOTE=$(npm view "$NAME@$LOCAL" version 2>/dev/null || echo "")
+          echo "local=$LOCAL remote=${REMOTE:-없음}"
+          if [ -z "$REMOTE" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$LOCAL 은 이미 배포돼 있습니다 — 건너뜁니다."
+          fi
+
+      - run: npm ci
+        if: steps.check.outputs.publish == 'true'
+      - run: npm publish
+        if: steps.check.outputs.publish == 'true'
