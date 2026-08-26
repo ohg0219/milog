@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { statePath, readJson, writeJsonAtomic } from './state/paths.js';
 import { ui } from './util/out.js';
@@ -36,6 +36,8 @@ function installedFromNpm() {
  * 하나라도 걸리면 **네트워크 호출조차 하지 않는다.**
  */
 export function updateDisabled() {
+  // 방금 업데이트하고 다시 띄운 프로세스다. 또 확인하면 무한히 자기를 재실행한다.
+  if (process.env.MILOG_UPDATED === '1') return '이번 실행에서 이미 업데이트했습니다';
   if (process.env.MILOG_NO_UPDATE === '1') return '사용자가 껐습니다 (MILOG_NO_UPDATE=1)';
   if (process.env.CI) return 'CI 환경';
   if (!process.stdout.isTTY) return '터미널이 아님';
@@ -119,13 +121,33 @@ export async function maybeAutoUpdate() {
   }
 
   ui.dim(`  새 버전 ${latest.version} 설치 중…`);
-  const ok = await npmInstall();
-  if (ok) {
-    ui.ok(`  ✓ ${latest.version} 으로 업데이트했습니다.`);
-    ui.dim('    이번 실행은 이전 버전 그대로입니다 — 다시 실행하면 새 버전으로 뜹니다.');
-  } else {
+  if (!await npmInstall()) {
     ui.warn(`  ✗ 자동 업데이트 실패 — npm i -g ${PKG}@latest`);
+    return;                       // 옛 버전으로라도 계속 쓰게 둔다
   }
+  ui.ok(`  ✓ ${latest.version} 으로 업데이트했습니다.`);
+  relaunch();
+}
+
+/**
+ * 새 코드로 자기 자신을 다시 띄우고 그 결과로 끝난다.
+ *
+ * 이게 없으면 "업데이트했습니다" 라고 해 놓고 **옛 코드로 계속 도는** 꼴이 된다 —
+ * 이미 메모리에 로드된 파일은 방금 깔린 새 파일이 아니기 때문이다.
+ * 진입점 경로는 그대로고 내용만 새것으로 바뀌었으므로 다시 실행하면 새 버전이 뜬다.
+ */
+function relaunch() {
+  const entry = fileURLToPath(new URL('../bin/milog.js', import.meta.url));
+  const r = spawnSync(process.execPath, [entry, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    env: { ...process.env, MILOG_UPDATED: '1' },
+  });
+  // 다시 띄우지도 못했으면 죽지 말고 옛 버전으로 하려던 일을 계속한다.
+  if (r.error) {
+    ui.warn(`  ✗ 새 버전으로 다시 시작하지 못했습니다 — 이번 실행은 이전 버전입니다.`);
+    return;
+  }
+  process.exit(r.status ?? 0);
 }
 
 function npmInstall() {

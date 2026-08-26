@@ -28,6 +28,31 @@ test('업데이트는 명령 시작 전에 돌고, 최신 여부는 매번 조�
 });
 
 /**
+ * 설치만 하고 옛 코드로 계속 돌면 "업데이트했습니다" 가 거짓말이 된다 —
+ * 이미 로드된 파일은 방금 깔린 새 파일이 아니기 때문이다. 설치 뒤 새 코드로 다시 띄운다.
+ * 그때 자식이 또 업데이트를 시도하면 자기를 무한히 재실행하므로 반드시 막아야 한다.
+ */
+test('설치 후 새 코드로 다시 띄우고, 자식은 다시 업데이트하지 않는다', async () => {
+  const src = await readFile(new URL('../src/update.js', import.meta.url), 'utf8');
+  assert.match(src, /function relaunch\(\)/);
+  assert.match(src, /spawnSync\(process\.execPath, \[entry/);
+  assert.match(src, /MILOG_UPDATED: '1'/, '자식 표시가 없으면 무한 재실행이 된다');
+  assert.match(src, /MILOG_UPDATED === '1'\) return/, '자식은 업데이트를 건너뛰어야 한다');
+  // 재실행에 실패해도 죽지 말고 하려던 일을 계속해야 한다
+  assert.match(src, /if \(r\.error\)/);
+});
+
+test('자식 프로세스는 업데이트 경로를 타지 않는다', () => {
+  const orig = process.env.MILOG_UPDATED;
+  process.env.MILOG_UPDATED = '1';
+  try {
+    assert.match(updateDisabled(), /이미 업데이트/);
+  } finally {
+    if (orig === undefined) delete process.env.MILOG_UPDATED; else process.env.MILOG_UPDATED = orig;
+  }
+});
+
+/**
  * 이 값이 비어 있으면 게시자 확인이 껍데기가 된다 — 누가 이름을 가져가도
  * 자동 설치가 그냥 돈다. 실수로 지워지지 않게 붙잡아 둔다.
  */
