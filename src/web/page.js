@@ -97,6 +97,9 @@ header{border-bottom:1px solid var(--line);background:var(--panel);padding:7px 1
 @keyframes slide{0%{left:-26%}100%{left:100%}}
 #go{background:var(--ok);border-color:var(--ok);color:#0d1017;font-weight:600;padding:5px 16px;flex:none;white-space:nowrap}
 #stop{flex:none;white-space:nowrap}
+/* 연장 — 남은 시간 바로 오른쪽. 눈에 띄되 [중지] 보다 세지 않게. */
+#extend{flex:none;white-space:nowrap;background:var(--bg);color:var(--ok);border-color:var(--ok);padding:5px 10px}
+#extend:hover{background:var(--ok);color:#0d1017}
 /* 자동 스크롤 — 글자는 그대로 두고 오른쪽 스위치로 켜고 끈다.
    버튼 전체가 색으로 채워지면 모드 버튼(.seg .on)과 헷갈린다. */
 #follow{flex:none;white-space:nowrap;display:flex;gap:8px;align-items:center;color:var(--dim);background:var(--bg)}
@@ -286,6 +289,7 @@ header{border-bottom:1px solid var(--line);background:var(--panel);padding:7px 1
     </button>
     <button id="go">조회</button>
     <span id="live" style="display:none"><i></i><span id="liveT"></span></span>
+    <button id="extend" style="display:none"></button>
     <button id="stop" style="display:none">중지</button>
     <span class="grow"></span>
     <span id="hint"></span>
@@ -424,6 +428,7 @@ let winA = 0, winB = 0;  // 타임라인이 덮는 구간
 let tlTimer = null;
 let runAt = 0;        // 조회 시작 시각 — 경과는 여기서 뺀다
 let stoppedMs = 0;    // 멈춘 시각 — 끝난 뒤에도 '얼마나 걸렸나' 를 남기려면 필요하다
+let tailExtraMs = 0;  // [+N분] 으로 더한 시간. 자동 정지 한도에 얹힌다
 let runTimer = null;  // 0.25초마다 표시기를 다시 그린다
 let usage = null;     // 마지막 usage SSE
 
@@ -781,7 +786,7 @@ const TAIL_UNIT = 30_000;    // 30초 버킷
 // 실시간을 이만큼 돌리면 멈추고 계속할지 묻는다. CLI 의 --max-minutes(기본 60분) 와 같은
 // 안전장치다 — 탭 전환으로 안 끊는 대신, '켜둔 채 잊기' 는 이쪽에서 막는다.
 // 0 이면 무제한. 무제한은 Infinity 로 두면 비교·표시가 자연히 꺼진다.
-const tailMaxMs = () => (SET.tailMaxMinutes > 0 ? SET.tailMaxMinutes * 60_000 : Infinity);
+const tailMaxMs = () => (SET.tailMaxMinutes > 0 ? SET.tailMaxMinutes * 60_000 + tailExtraMs : Infinity);
 // 눈금이 딱 떨어지는 단위만 쓴다 — '1시간 7분 단위' 같은 건 읽을 수가 없다.
 const UNITS = [[30_000,'30초'],[60_000,'1분'],[300_000,'5분'],[600_000,'10분'],[1_800_000,'30분'],
                [3_600_000,'1시간'],[10_800_000,'3시간'],[21_600_000,'6시간'],[86_400_000,'1일']];
@@ -877,6 +882,15 @@ function drawRunState() {
   $('#go').style.display = on ? 'none' : '';
   $('#go').textContent = live ? '시작' : '조회';
   $('#stop').style.display = on ? '' : 'none';
+  // 자동 정지가 있는 실시간 추적일 때만 연장할 것이 있다.
+  const canExtend = on && live && tailMaxMs() !== Infinity;
+  $('#extend').style.display = canExtend ? '' : 'none';
+  if (canExtend) {
+    $('#extend').textContent = '연장';
+    // 얼마나 늘어나는지는 설정된 자동 정지 시간이다 — 버튼 이름에 숫자를 박으면
+    // 설정을 바꿨을 때 어긋나므로 툴팁으로 알린다.
+    $('#extend').title = SET.tailMaxMinutes + '분 더 추적합니다';
+  }
   // 실시간엔 '도는 중' 바를 안 띄운다 — 끝이 없는 작업이라 계속 흘러가면 소음이 된다.
   // 살아 있다는 신호는 초록 점과 계속 쌓이는 줄로 이미 충분하다.
   $('#prog').classList.toggle('on', on && !live);
@@ -944,7 +958,7 @@ async function run() {
 
   const live = mode === 'tail';
   all = []; sel = null;
-  runAt = Date.now(); stoppedMs = 0; usage = null;
+  runAt = Date.now(); stoppedMs = 0; tailExtraMs = 0; usage = null;
   resetColors();
   clearLog(live ? '' : '조회 중…');
   $('#hint').textContent = '';
@@ -1193,6 +1207,11 @@ document.addEventListener('click', async (e) => {
     $('#panel').classList.remove('open');
   } else if (t.id === 'go') {
     run();
+  } else if (t.id === 'extend') {
+    // 업무시간 내내 이어 보고 싶을 때. 남은 시간에 설정된 만큼을 더한다 —
+    // 다시 시작하면 쌓아 둔 줄이 날아가므로 '멈추기 전에 늘리는' 길이 필요하다.
+    tailExtraMs += SET.tailMaxMinutes * 60_000;
+    drawRunState();
   } else if (t.id === 'stop') {
     stopStream();
   } else if (hit('#follow')) {

@@ -254,6 +254,24 @@ test('탭 전환으로 실시간이 끊기지 않는다', () => {
   assert.match(html, /실시간 추적을 멈췄습니다/);
 });
 
+/**
+ * 자동 정지에 걸려 멈추면 [시작] 밖에 없는데, 그건 쌓아 둔 줄을 다 버리고 처음부터 다시
+ * 받는다. 업무시간 내내 이어 보려면 **멈추기 전에 늘리는** 길이 있어야 한다.
+ */
+test('실시간은 멈추기 전에 연장할 수 있다', () => {
+  const html = renderPage('tok');
+  assert.match(html, /<button id="extend"/);
+  // 늘어나는 양은 설정값이라 버튼 이름에 숫자를 박지 않는다
+  assert.match(html, /\$\('#extend'\)\.textContent = '연장'/);
+  // 한도에 연장분이 더해져야 실제로 미뤄진다
+  assert.match(html, /SET\.tailMaxMinutes \* 60_000 \+ tailExtraMs/);
+  assert.match(html, /tailExtraMs \+= SET\.tailMaxMinutes \* 60_000/);
+  // 새 조회를 시작하면 연장분은 리셋 — 안 그러면 다음 세션까지 따라온다
+  assert.match(html, /runAt = Date\.now\(\); stoppedMs = 0; tailExtraMs = 0;/);
+  // 무제한이면 연장할 게 없다
+  assert.match(html, /on && live && tailMaxMs\(\) !== Infinity/);
+});
+
 test('페이지가 CLI 의 렌더링 계약을 따른다', () => {
   const html = renderPage('tok');
   // trace 식별자는 앞이 아니라 뒤 12자리 (앞 8자리는 생성 시각이라 구분이 안 된다)

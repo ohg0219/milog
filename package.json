@@ -1,6 +1,6 @@
 {
   "name": "@ohg0219/milog",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Browse structured CloudWatch JSON logs in your browser — OpenTelemetry spans, trace trees, and error timelines.",
   "author": "hayden",
   "keywords": [
