@@ -22,7 +22,7 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
-/** 관측된 수집 지연의 대략적인 상위 분위수. */
+/** 관측된 지연의 대략적인 상위 분위수. */
 function rollingQuantile(q = 0.99, size = 256) {
   const buf = [];
   return {
@@ -35,7 +35,10 @@ function rollingQuantile(q = 0.99, size = 256) {
   };
 }
 
-const LOOKBACK_MIN = 2_000;
+// 실측(ap-northeast-2, ECS+CloudWatch agent): 이벤트가 FilterLogEvents 로 조회
+// 가능해지기까지 p50 6.5초 · p99 7.0초가 걸렸다. 학습이 쌓이기 전 첫 틱들이
+// 그 지연에 걸려 유실되지 않도록 하한을 그 위에 둔다.
+const LOOKBACK_MIN = 10_000;
 const LOOKBACK_MAX = 120_000;
 const SEEN_MAX = 50_000;
 
@@ -151,14 +154,23 @@ export async function* pollLogEvents({
       );
 
       for await (const page of pager) {
+        const pageAt = Date.now();
         for (const e of page.events ?? []) {
           scanned += 1;
           if (e.timestamp > maxTs) maxTs = e.timestamp;
-          if (typeof e.ingestionTime === 'number') {
-            st.lagP99.push(Math.max(0, e.ingestionTime - e.timestamp));
-          }
           if (st.seen.has(e.eventId)) { counters.redundant += 1; continue; }
           st.seen.set(e.eventId, e.timestamp);
+          // 창을 얼마나 뒤로 물려야 하는지는 '언제 조회 가능해지는가' 로 정해야 한다.
+          //
+          // 예전엔 ingestionTime(CloudWatch 가 받은 시각)으로 쟀는데, 그건 조회에
+          // 나타나는 시각보다 4~5초 이르다(실측). 그 값으로 창을 잡으면 창이 이벤트를
+          // 앞질러 지나가고, 지나간 이벤트는 영구히 유실된다 — 실시간에서 요청 5건 중
+          // 1건만 보이던 원인이다.
+          //
+          // 처음 본 이벤트의 '지금 - timestamp' 가 우리가 실제로 겪는 지연이다.
+          // 재조회분(seen)은 오래된 값이라 섞으면 안 되고, 첫 조회는 과거 구간을
+          // 통째로 받는 자리라 지연으로 볼 수 없다.
+          if (st.primed) st.lagP99.push(Math.max(0, pageAt - e.timestamp));
           out.push({
             group: g,
             timestamp: e.timestamp,
