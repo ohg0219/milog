@@ -91,6 +91,14 @@ export async function* pollLogEvents({
     // '여기까지는 이미 훑었다' 지점. 커서만 쓰면 조용한 그룹에서 창이 계속 넓어져
     // 같은 이벤트를 매 틱 다시 받는다 (커서는 마지막 이벤트에 멈춰 있으므로).
     scannedTo: startMs,
+    // 틱 상한에 걸려 중간에 끊었을 때 이어받을 자리.
+    //
+    // 커서만으로는 그 자리로 못 돌아온다 — 한 ms 에 이벤트가 몰려 페이지를 가득
+    // 채우면 그 페이지의 maxTs 가 커서를 넘지 못해, 다음 틱이 똑같은 창으로
+    // 똑같은 첫 페이지를 받고 영구히 멈춘다 (하루 조회가 6천 건에서 정지하던 원인).
+    nextToken: null,
+    tokenFrom: startMs,  // 그 토큰을 만든 요청의 startTime. 파라미터가 같아야 토큰이 유효하다
+    advanced: false,     // 이 틱에 조금이라도 나아갔는가 (정지 감지용)
   }]));
 
   // 과거 구간 조회는 사용자가 준 끝 시각을 지킨다. 예전엔 무조건 Date.now() 라
@@ -118,15 +126,22 @@ export async function* pollLogEvents({
     let scanned = 0;
     let localCap = false;
     const queryEnd = endTime ?? Date.now();
+    const cursorBefore = st.cursor;
 
-    // 이미 훑은 지점에서 lookback 만큼만 물러난다. 그 앞은 본 적이 있거나 없던 구간이다.
-    const from = Math.max(0, Math.max(st.cursor, st.scannedTo) - lookback);
+    // 지난 틱을 상한 때문에 끊었으면 그 자리에서 이어받는다. 토큰은 **같은 요청
+    // 파라미터**에서만 유효하므로 startTime 도 그때 값을 그대로 쓴다.
+    const resuming = st.nextToken != null;
+    // 이어받는 게 아니면, 이미 훑은 지점에서 lookback 만큼만 물러난다.
+    // 그 앞은 본 적이 있거나 없던 구간이다.
+    const from = resuming
+      ? st.tokenFrom
+      : Math.max(0, Math.max(st.cursor, st.scannedTo) - lookback);
 
     try {
       const pager = paginateFilterLogEvents(
         // pageSize 는 '한 번에 돌려줄 최대 건수' 다. 필요한 양이 적으면 줄여야
         // 200건 보여주려고 한 페이지(최대 1 MB)를 통째로 받는 일이 없다.
-        { client, pageSize: cfg.pageSize ?? 10_000 },
+        { client, pageSize: cfg.pageSize ?? 10_000, ...(resuming && { startingToken: st.nextToken }) },
         {
           logGroupName: g,
           startTime: from,
@@ -158,10 +173,14 @@ export async function* pollLogEvents({
         if (pages >= cfg.maxPagesPerTick || scanned >= cfg.maxEventsPerTick) {
           capHit = true;
           localCap = true;
+          st.nextToken = page.nextToken ?? null;
+          st.tokenFrom = from;
           break;
         }
         if (signal.aborted) break;
       }
+      // 끝까지 훑었으면 이어받을 자리가 없다.
+      if (!localCap) st.nextToken = null;
 
       st.strikes = 0;
       // API 가 돌려준 집합으로만 커서를 옮긴다. 필터링 뒤 집합으로 계산하면
@@ -171,7 +190,12 @@ export async function* pollLogEvents({
       if (!localCap) st.scannedTo = Math.max(st.scannedTo, queryEnd);
       st.primed = true;
       pruneSeen(st, lookback);
+      st.advanced = out.length > 0 || st.nextToken != null || st.cursor > cursorBefore;
     } catch (err) {
+      // 토큰은 요청 파라미터에 묶여 있다 — 실패한 뒤에도 들고 있으면 같은 자리에서
+      // 계속 넘어진다. 커서 기반으로 되돌려 복구한다.
+      st.nextToken = null;
+      st.advanced = out.length > 0;
       handleGroupError(g, st, err);
     }
     return out;
@@ -239,6 +263,13 @@ export async function* pollLogEvents({
     // 다 훑었으면(상한에 안 걸렸으면) 거기서 끝난다.
     if (!cfg.follow) {
       if (!capHit) return;
+      // 상한에 걸렸는데 어느 그룹도 나아가지 못했으면 더 받을 것이 없다 — 이어받을
+      // 토큰도, 새 이벤트도, 커서 전진도 없는 상태다. 여기서 안 멈추면 같은 페이지를
+      // 무한히 다시 받으며 "조회 중" 으로 남는다.
+      if (live.every((g) => !state.get(g).advanced)) {
+        ui.warn('  더 나아가지 못해 조회를 멈춥니다 — 구간을 좁혀 다시 조회해 보세요.');
+        return;
+      }
       continue;
     }
 
