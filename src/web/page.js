@@ -1094,16 +1094,49 @@ function renderNode(n, depth, t0, total) {
 
 let openTraceId = null;
 
+/**
+ * 이 trace 를 담을 조회 시작 시각.
+ *
+ * since 는 **이벤트 시각** 기준인데 span 은 끝날 때 기록된다. 고정 창으로 잡으면
+ * 오래 걸린 배치의 앞부분이 통째로 잘린다 — 15분짜리 배치를 종료 1시간 뒤에 열면
+ * since=1h 로는 한 건도 안 잡혀 '찾지 못했습니다' 가 뜬다.
+ *
+ * 목록에 이미 그 trace 의 span 이 있으므로 시작 시각(ts − 소요)을 되살릴 수 있다.
+ * 여유 10분을 앞에 두고, 화면에 단서가 없으면 종전처럼 상대 창으로 물러난다.
+ */
+function traceSince(id, fallback) {
+  const starts = all
+    .filter((ev) => ev.traceId === id && Number.isFinite(ev.ts))
+    .map((ev) => ev.ts - (ev.durationMs ?? 0));
+  if (!starts.length) return fallback;
+
+  const want = Math.min(...starts) - 10 * 60_000;
+  // 창은 **앞으로만** 넓힌다. trace 가 이미 조회 구간 안쪽에서 시작했다면
+  // 사용자가 고른 구간을 좁히지 않는다.
+  // '2h' 같은 상대 표기와 ISO 를 함께 받는다. 정규식은 쓰지 않는다 — 이 파일은
+  // 통째로 템플릿 문자열이라 역슬래시가 렌더 과정에서 한 겹 벗겨진다.
+  const unit = { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5 };
+  const spec = String(fallback);
+  const mul = unit[spec.slice(-1)];
+  const n = Number(spec.slice(0, -1));
+  const base = mul && Number.isInteger(n) && n > 0
+    ? Date.now() - n * mul
+    : Date.parse(spec);
+  if (Number.isFinite(base) && base <= want) return fallback;
+  // ISO(UTC) 로 넘긴다 — 서버의 parseSince 가 Date.parse 로 정확히 받는다.
+  return new Date(want).toISOString();
+}
+
 async function openTrace(id) {
   openTraceId = id;
   $('#panel').classList.add('open');
   $('#ptitle').textContent = 'trace ' + shortTrace(id);
   $('#tree').innerHTML = '<div class="msg">불러오는 중…</div>';
   try {
-    // 실시간엔 날짜 칸이 없다 — 최근 1시간에서 찾는다.
+    // 실시간엔 날짜 칸이 없다 — 목록에서 되살린 시작 시각부터 찾는다.
     const r = await fetch(api('/api/trace', mode === 'tail'
-      ? { profile, groups: picked.join(','), since: '1h', trace: id }
-      : { ...params(), trace: id }));
+      ? { profile, groups: picked.join(','), since: traceSince(id, '1h'), trace: id }
+      : { ...params(), since: traceSince(id, params().since), trace: id }));
     const d = await r.json();
     if (!r.ok) { $('#tree').innerHTML = '<div class="msg err">'+esc(d.error)+'</div>'; return; }
     if (!d.found) { $('#tree').innerHTML = '<div class="msg">찾지 못했습니다. 기간을 늘려 보세요.</div>'; return; }
