@@ -281,3 +281,60 @@ test('페이지가 CLI 의 렌더링 계약을 따른다', () => {
   // tier 마커
   for (const marker of ['● ', '↳ ', '⇡ ', '· ']) assert.ok(html.includes(marker), `마커 누락: ${marker}`);
 });
+
+/** 렌더된 페이지에서 함수 하나를 꺼내 실제로 돌려 본다. 정규식 대조만으로는 동작을 모른다. */
+function pageFn(html, name) {
+  const script = /<script>([\s\S]*)<\/script>/.exec(html)[1];
+  const start = script.indexOf(`function ${name}(`);
+  let depth = 0;
+  let i = script.indexOf('{', start);
+  for (; i < script.length; i++) {
+    if (script[i] === '{') depth++;
+    else if (script[i] === '}' && --depth === 0) break;
+  }
+  return new Function(`${script.slice(start, i + 1)}; return ${name};`)();
+}
+
+test('페이지 스크립트가 문법 오류 없이 파싱된다 — 템플릿 문자열이라 역슬래시가 한 겹 벗겨진다', () => {
+  const script = /<script>([\s\S]*)<\/script>/.exec(renderPage('tok'))[1];
+  assert.doesNotThrow(() => new Function(script));
+});
+
+/**
+ * 실측: log.error(msg, e) 로 찍힌 스택 138줄 중 내 코드 6줄.
+ * 예외는 span 이 아니라 span 에 딸린 로그에 붙어 있어서, 트리에서 아예 안 보였다.
+ */
+test('스택은 버튼으로 열고, span 에 딸린 로그의 예외도 보여준다', () => {
+  const html = renderPage('tok');
+  assert.match(html, /data-stk="' \+ i \+ '">스택 /);
+  assert.match(html, /const lex = l\.exception \?\? l\.spanException;\s*if \(lex\) h \+= renderExc\(lex/);
+  // 트리를 새로 그릴 때 비우지 않으면 번호가 이전 trace 의 스택을 가리킨다
+  assert.match(html, /STACKS = \[\];\s*let h = '<div class="msg">'/);
+  // 16KB 상한에 걸린 스택은 잘렸다고 알려야 한다
+  assert.match(html, /const STACK_CAP = 16384;/);
+});
+
+test('프레임워크 프레임은 두 줄 이상 이어질 때만 접는다', () => {
+  const foldStack = pageFn(renderPage('tok'), 'foldStack');
+  const isApp = (f) => f.includes('com.example');
+  const lines = [
+    '  at org.fw.Thrower.throwIt(A.java:1)',   // 던진 자리 — 내 코드가 아니어도 남긴다
+    '  at org.fw.B.b(B.java:1)',
+    '  at org.fw.C.c(C.java:1)',
+    '  at com.example.Service.run(S.java:51)',
+    '  at org.fw.D.d(D.java:1)',               // 한 줄뿐이라 접지 않는다
+    '  at com.example.Controller.go(C.java:9)',
+    'Caused by: java.io.IOException: boom',
+    '  at org.fw.E.e(E.java:1)',               // Caused by 바로 다음 = 원인이 난 자리
+    '  at org.fw.F.f(F.java:1)',
+    '  at org.fw.G.g(G.java:1)',
+    '  ... 12 more',
+  ];
+  const parts = foldStack(lines, isApp);
+  assert.deepEqual(parts.map((p) => (p.fold ? `fold${p.fold.length}` : p.line.trim().split('(')[0])), [
+    'at org.fw.Thrower.throwIt', 'fold2', 'at com.example.Service.run', 'at org.fw.D.d',
+    'at com.example.Controller.go', 'Caused by: java.io.IOException: boom', 'at org.fw.E.e', 'fold2', '... 12 more',
+  ]);
+  assert.deepEqual(parts.filter((p) => p.app).map((p) => p.line.trim().split('(')[0]),
+    ['at com.example.Service.run', 'at com.example.Controller.go']);
+});

@@ -140,6 +140,12 @@ header{border-bottom:1px solid var(--line);background:var(--panel);padding:7px 1
 .ex{color:var(--bad)}
 .frame{color:var(--dim)}
 .frame.app{color:var(--fg)}
+/* 스택은 버튼으로 연다. 138줄 중 내 코드가 6줄인 게 보통이라 통째로 펼치면 트리가 묻힌다. */
+.stkbtn,.stkhd button{font-size:.9em;padding:0 7px;margin-left:6px;border-radius:4px;color:var(--accent);vertical-align:1px}
+.trow[hidden]{display:none} /* display:grid 가 hidden 속성을 이긴다 — 되돌려 준다 */
+.stkhd{margin:2px 0 4px}
+.frame.fold{color:var(--accent);cursor:pointer}
+.stkcut{color:var(--warn);margin-top:4px}
 .legacy{color:var(--fg)}
 #panel{position:fixed;inset:0 0 0 auto;width:var(--pw,min(920px,92vw));background:var(--panel);border-left:1px solid var(--line);
        transform:translateX(100%);transition:transform .16s ease;display:flex;flex-direction:column;z-index:5}
@@ -1017,12 +1023,95 @@ async function run() {
  * 막대가 없는 행(상세·머리글)도 칸은 차지해야 세로가 맞지만, 빈 트랙 배경까지
  * 그리면 회색 막대가 줄마다 깔린다 — 칸만 비워 둔다.
  */
-function trow({ depth, cls = '', dur = '', bar = '', body }) {
-  return '<div class="trow wf' + (cls ? ' ' + cls : '') + '" style="--d:' + depth + '">'
+function trow({ depth, cls = '', dur = '', bar = '', body, attrs = '' }) {
+  return '<div class="trow wf' + (cls ? ' ' + cls : '') + '" style="--d:' + depth + '"' + (attrs ? ' ' + attrs : '') + '>'
     + '<span class="dur">' + dur + '</span>'
     + (bar ? '<span class="track">' + bar + '</span>' : '<span></span>')
     + '<span class="nmcol">' + body + '</span>'
     + '</div>';
+}
+
+// ── 스택 트레이스 ─────────────────────────────────────────────────────────
+/**
+ * 스택은 접어 두고 버튼으로 연다. 실측: 138줄 중 내 코드 6줄,
+ * 나머지는 Spring·Tomcat 이다. 통째로 펼치면 트리가 스택에 묻힌다.
+ * 원문은 여기 모아 두고 버튼에는 번호만 싣는다 — 16KB 를 data 속성에 넣을 이유가 없다.
+ * 트리를 새로 그릴 때마다 비운다.
+ */
+let STACKS = [];
+
+// Log4j2 JsonTemplateLayout 의 maxStringLength(기본 16384)에 걸리면 끝이 '…' 로 잘린다.
+// 실측 16,385자. Caused by 같은 뒷부분이 사라졌을 수 있다는 걸 알려야 한다.
+const STACK_CAP = 16384;
+const isCutStack = (s) => s.length >= STACK_CAP && s.endsWith('…');
+
+/**
+ * 보여줄 조각으로 나눈다. 내 코드와 구조 줄(Caused by, ... N more)은 늘 보이고, 구조 줄
+ * 바로 다음 프레임(= 던진 자리)도 남긴다. 그 사이 프레임워크 프레임은 두 줄 이상
+ * 이어지면 한 덩어리로 접는다 — 한 줄짜리를 접으면 접힌 표시가 원래 줄보다 길다.
+ */
+function foldStack(lines, isApp) {
+  const out = [];
+  let run = [];
+  const flush = () => {
+    if (run.length >= 2) out.push({ fold: run });
+    else for (const f of run) out.push({ line: f, app: false });
+    run = [];
+  };
+  lines.forEach((f, i) => {
+    const isFrame = f.trimStart().startsWith('at ');
+    const prevFrame = i > 0 && lines[i - 1].trimStart().startsWith('at ');
+    if (!isFrame || !prevFrame || isApp(f)) {
+      flush();
+      out.push({ line: f, app: isFrame && isApp(f) });
+    } else run.push(f);
+  });
+  flush();
+  return out;
+}
+
+/** 예외 한 줄 + [스택 N줄] 버튼. 스택 본문은 누를 때 그린다 — 예외마다 138줄씩 미리 깔 이유가 없다. */
+function renderExc(ex, depth) {
+  const msg = ex.message ? ': ' + esc(ex.message) : '';
+  let body = '✗ ' + esc(ex.className) + (msg.length > 220 ? '<span class="clip">' + msg + '</span>' : msg);
+  const raw = ex.stackTrace ? String(ex.stackTrace) : '';
+  if (!raw) return trow({ depth, cls: 'detail ex', body });
+  const i = STACKS.push(raw) - 1;
+  body += '<button class="stkbtn" data-stk="' + i + '">스택 ' + (raw.split('\\n').length - 1) + '줄 ▸</button>';
+  return trow({ depth, cls: 'detail ex', body })
+    + trow({ depth, cls: 'detail', body: '', attrs: 'data-stkbox="' + i + '" hidden' });
+}
+
+/** 스택 본문. 강조 패키지가 비어 있으면 무엇이 내 코드인지 모르니 접지 않고 전부 보여준다. */
+function stackHtml(i, full) {
+  const raw = STACKS[i];
+  const lines = raw.split('\\n').slice(1).map((f) => f.replace(/\\t/g, '  '));
+  const canFold = CFG.appPackages.length > 0;
+  let h = '<div class="stkhd">스택 ' + lines.length + '줄'
+    + (canFold ? ' · 내 코드 ' + lines.filter(isAppFrame).length + '줄'
+      + '<button data-stkfull="' + i + '">' + (full ? '내 코드 위주' : '전체 보기') + '</button>' : '')
+    + '<button data-stkcopy="' + i + '">복사</button></div>';
+  const frame = (f, app) => '<div class="frame' + (app ? ' app' : '') + '">' + esc(f) + '</div>';
+  const parts = full || !canFold ? lines.map((f) => ({ line: f, app: isAppFrame(f) })) : foldStack(lines, isAppFrame);
+  for (const p of parts) {
+    h += p.fold
+      ? '<div class="frame fold" data-unfold="1">⋯ 프레임워크 ' + p.fold.length + '줄</div>'
+        + '<div hidden>' + p.fold.map((f) => frame(f, false)).join('') + '</div>'
+      : frame(p.line, p.app);
+  }
+  if (isCutStack(raw)) h += '<div class="stkcut">⚠ 16KB 에서 잘렸습니다 — 원본 로그 설정(maxStringLength)의 상한입니다</div>';
+  return h;
+}
+
+/** 127.0.0.1 은 보안 출처라 clipboard API 가 열려 있다. */
+async function copyStack(i, btn) {
+  try {
+    await navigator.clipboard.writeText(STACKS[i]);
+    btn.textContent = '복사했습니다';
+  } catch {
+    btn.textContent = '복사 실패';
+  }
+  setTimeout(() => { btn.textContent = '복사'; }, 1500);
 }
 
 function renderNode(n, depth, t0, total) {
@@ -1072,19 +1161,15 @@ function renderNode(n, depth, t0, total) {
   }
 
   const ex = ev.spanException ?? ev.exception;
-  if (ex) {
-    h += detail('✗ ' + esc(ex.className) + (ex.message ? ': ' + esc(ex.message) : ''), 'ex');
-    if (ex.stackTrace) {
-      const frames = String(ex.stackTrace).split('\\n').slice(1)
-        .map((f) => '<div class="frame' + (isAppFrame(f) ? ' app' : '') + '">' + esc(f.replace(/\\t/g, '  ')) + '</div>').join('');
-      h += detail(frames);
-    }
-  }
+  if (ex) h += renderExc(ex, depth + 1);
 
   for (const l of n.logs) {
     const lv = String(l.level ?? '').toUpperCase();
     h += detail('<span class="t">' + timeText(l) + '</span> <span class="' + lv + '">' + lv + '</span> '
       + esc(String(l.message ?? '').split('\\n')[0]));
+    // log.error(msg, e) 의 예외는 span 이 아니라 이 로그에 붙는다 — 실측에서 스택은 전부 여기 있었다.
+    const lex = l.exception ?? l.spanException;
+    if (lex) h += renderExc(lex, depth + 2);
   }
 
   // 자식은 별도 컨테이너에 담는다 — 마커를 눌렀을 때 통째로 접으려면 묶여 있어야 한다.
@@ -1141,6 +1226,7 @@ async function openTrace(id) {
     if (!r.ok) { $('#tree').innerHTML = '<div class="msg err">'+esc(d.error)+'</div>'; return; }
     if (!d.found) { $('#tree').innerHTML = '<div class="msg">찾지 못했습니다. 기간을 늘려 보세요.</div>'; return; }
     const total = Math.max(1, d.t1 - d.t0);
+    STACKS = [];
     let h = '<div class="msg">' + d.totalSpans + ' spans · ' + fmtMs(d.t1-d.t0)
       + (d.orphanCount ? ' · <span class="err">'+d.orphanCount+' orphan</span>' : '')
       + '<br>시작 시각은 종료 시각 − 소요 로 되살린 근사치다.</div>';
@@ -1149,7 +1235,8 @@ async function openTrace(id) {
     h += trow({ depth: 0, cls: 'thead', dur: '소요', bar: '', body: 'span' });
     h += d.roots.map((n) => renderNode(n, 0, d.t0, total)).join('');
     if (d.unattached.length) h += '<div class="msg">미연결 로그 '+d.unattached.length+'건</div>'
-      + d.unattached.map((l) => '<div class="node t">'+timeText(l)+' '+esc(String(l.message??'').split('\\n')[0])+'</div>').join('');
+      + d.unattached.map((l) => '<div class="node t">'+timeText(l)+' '+esc(String(l.message??'').split('\\n')[0])+'</div>'
+        + ((l.exception ?? l.spanException) ? renderExc(l.exception ?? l.spanException, 0) : '')).join('');
     $('#tree').innerHTML = h;
   } catch (e) { $('#tree').innerHTML = '<div class="msg err">'+esc(e.message)+'</div>'; }
 }
@@ -1225,6 +1312,26 @@ document.addEventListener('click', async (e) => {
     openCal(false);
   } else if (t.id === 'tlClr') {
     sel = null; redraw();
+  } else if (t.dataset.stk) {
+    const box = document.querySelector('[data-stkbox="' + t.dataset.stk + '"]');
+    const opening = box.hidden;
+    // 처음 열 때만 그린다. 다시 접었다 펴도 '전체 보기' 로 바꿔 둔 상태는 남는다.
+    if (opening && !box.dataset.done) {
+      box.querySelector('.nmcol').innerHTML = stackHtml(Number(t.dataset.stk), false);
+      box.dataset.done = '1';
+    }
+    box.hidden = !opening;
+    t.textContent = t.textContent.slice(0, -1) + (opening ? '▾' : '▸');
+  } else if (t.dataset.stkfull) {
+    const box = t.closest('[data-stkbox]');
+    box.dataset.full = box.dataset.full ? '' : '1';
+    box.querySelector('.nmcol').innerHTML = stackHtml(Number(t.dataset.stkfull), !!box.dataset.full);
+  } else if (t.dataset.stkcopy) {
+    copyStack(Number(t.dataset.stkcopy), t);
+  } else if (t.dataset.unfold) {
+    // 접힌 프레임워크 줄은 그 덩어리만 편다 — 전체를 펴려면 '전체 보기' 가 있다.
+    t.nextElementSibling.hidden = false;
+    t.remove();
   } else if (t.closest('.trow.tog')) {
     // 줄 클릭 → 그 span 의 하위를 통째로 접었다 편다.
     // 단, 텍스트를 드래그로 고르는 중이면 무시한다 (복사하려다 접히면 짜증난다).
