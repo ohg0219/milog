@@ -71,6 +71,7 @@ export async function discoverProfiles({ prefix = DEFAULT_PROFILE_PREFIX } = {})
       region: s.region ?? '',
       roleName: s.sso_role_name ?? '',
       ssoSession: s.sso_session ?? '',
+      ssoStartUrl: s.sso_start_url ?? '', // sso_session 없는 옛 형식은 이게 토큰 캐시 키다
       isSso: Boolean(s.sso_session || s.sso_start_url),
       label: labels.get(name) ?? '',
     }))
