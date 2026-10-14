@@ -210,6 +210,17 @@ test('스택 강조 패키지는 하드코딩이 아니라 설정에서 온다',
   assert.match(html, /CFG\.appPackages = String\(SET\.appPackages/);
 });
 
+/** 제외 목록은 목록·타임라인에서만 빼고, 설정은 화면 가운데 모달로 뜬다. */
+test('제외 span 은 목록에서 빠지고 설정은 모달이다', () => {
+  const html = renderPage('tok');
+  assert.match(html, /CFG\.exclude\.has\(ev\.spanName\)/);
+  assert.match(html, /evs\.filter\(shown\)\.map\(renderLine\)/);
+  // 템플릿 리터럴 안이라 \\n 으로 써야 한다 — \n 이면 페이지에 실제 줄바꿈이 박혀 문법이 깨진다
+  assert.match(html, /split\('\\n'\)/);
+  assert.match(html, /<div id="setdim"><\/div>/);
+  assert.match(html, /<button id="gear">설정<\/button>/);
+});
+
 test('날짜는 오프셋을 붙여 보낸다 — 안 붙이면 UTC 자정으로 9시간 밀린다', () => {
   const html = renderPage('tok');
   assert.match(html, /'T00:00:00' \+ offset/);

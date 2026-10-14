@@ -239,9 +239,12 @@ header{border-bottom:1px solid var(--line);background:var(--panel);padding:7px 1
 /* 설정 팝오버 — 기존 .pop 골격을 그대로 쓰고 안쪽 배치만 더한다 */
 #gear{flex:none;background:var(--bg);padding:5px 10px}
 #gear.open{border-color:var(--accent)}
-#setpop{right:12px;width:430px}
-#setpop .s{flex:1}
-#setpop .lst{padding:4px 0;max-height:none}
+/* 설정은 화면 가운데 모달이다 — 열려 있는 동안 뒤를 어둡게 덮어 클릭을 막는다. [닫기] 로만 닫힌다. */
+#setpop{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:460px;max-height:90vh;z-index:21}
+#setdim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:20;display:none}
+#setdim.open{display:block}
+#setpop .s{flex:1;min-height:0}
+#setpop .lst{padding:4px 0;max-height:none;overflow:auto}
 #setpop .grp{display:flex;gap:10px;align-items:center;padding:6px 12px}
 #setpop .grp > span:first-child{flex:1;min-width:0}
 #setpop .grp.col2{flex-direction:column;align-items:stretch;gap:5px}
@@ -250,6 +253,15 @@ header{border-bottom:1px solid var(--line);background:var(--panel);padding:7px 1
 #setpop .dim{color:var(--dim)}
 #setpop input{background:var(--bg)}
 #setpop input.num{width:7ch;text-align:right}
+/* 제외 목록 — 항목 단위로 추가·수정·삭제 */
+#s-excl{border:1px solid var(--line);border-radius:6px;max-height:180px;overflow:auto}
+#s-excl .xi{display:flex;gap:6px;align-items:center;padding:3px 4px 3px 8px}
+#s-excl .xi + .xi{border-top:1px solid var(--line)}
+#s-excl .xi:hover{background:rgba(122,162,247,.12)}
+#s-excl .xi .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#s-excl .xi input{flex:1;min-width:0}
+#s-excl .xi button{padding:1px 7px;font-size:.92em}
+#s-excl .none{padding:5px 8px;color:var(--dim)}
 /* 팝오버 안의 세그먼트는 헤더 것보다 작다 */
 .seg.sm{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;flex:none}
 .seg.sm button{border:0;border-right:1px solid var(--line);border-radius:0;padding:3px 9px;
@@ -299,7 +311,7 @@ header{border-bottom:1px solid var(--line);background:var(--panel);padding:7px 1
     <button id="stop" style="display:none">중지</button>
     <span class="grow"></span>
     <span id="hint"></span>
-    <button id="gear" title="설정">⚙</button>
+    <button id="gear">설정</button>
   </div>
   <div class="row" id="cond">
     <input id="term" class="grow" placeholder="검색어 (비우면 그 구간 전체) — 원본 줄 전체에서, 한글 가능" autocomplete="off">
@@ -337,6 +349,7 @@ header{border-bottom:1px solid var(--line);background:var(--panel);padding:7px 1
       <div class="ft"><span class="grow" id="csum"></span><button id="dapply" class="apply">적용</button></div>
     </div>
   </div>
+  <div id="setdim"></div>
   <div class="pop" id="setpop">
     <div class="col s">
       <div class="hd">설정</div>
@@ -355,6 +368,11 @@ header{border-bottom:1px solid var(--line);background:var(--panel);padding:7px 1
         <div class="sep">읽기</div>
         <div class="grp col2"><span>스택에서 하이라이트할 패키지 리스트</span>
           <input id="s-pkg" placeholder="com.acme, org.acme — 콤마로 여러 개 (비우면 안 함)" autocomplete="off">
+        </div>
+        <div class="grp col2"><span>목록에서 숨길 span.name <span class="dim">(완전 일치)</span></span>
+          <div id="s-excl"></div>
+          <span class="row"><input id="s-excl-new" class="grow" placeholder="예: SELECT information_schema.replica_host_status" autocomplete="off">
+            <button id="s-excl-add">추가</button></span>
         </div>
         <div class="grp"><span>소요시간 색</span>
           <span class="row">
@@ -413,8 +431,8 @@ const api = (p, params = {}) => {
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 
-let CFG = { slow: { warn: 200, bad: 1000 }, maxGroups: 10, appPackages: [] };
-let SET = { theme: 'system', fontSize: 13, appPackages: '', slowWarn: 200, slowBad: 1000,
+let CFG = { slow: { warn: 200, bad: 1000 }, maxGroups: 10, appPackages: [], exclude: new Set() };
+let SET = { theme: 'system', fontSize: 13, appPackages: '', excludeSpans: '', slowWarn: 200, slowBad: 1000,
             tailMaxMinutes: 60, intervalSec: 3 };
 let groups = [];      // 전체 목록
 let picked = [];      // 선택된 이름
@@ -581,10 +599,13 @@ const logEl = $('#log');
 function clearLog(msg) { logEl.innerHTML = msg ? '<div class="msg">'+esc(msg)+'</div>' : ''; }
 
 const inSel = (ev) => !sel || (ev.ts >= sel.a && ev.ts < sel.b);
+// 제외 목록은 목록·타임라인에서만 뺀다. all 에는 남겨 두므로 목록을 비우면 바로 돌아온다.
+// trace 상세는 건드리지 않는다 — 트리 구조는 온전히 보여야 한다.
+const shown = (ev) => !(ev.spanName && CFG.exclude.has(ev.spanName));
 
 /** 구간이 바뀌었을 때만 통째로 다시 그린다 — 평소엔 아래 증분 렌더를 쓴다. */
 function redraw() {
-  const v = all.filter(inSel);
+  const v = all.filter((ev) => inSel(ev) && shown(ev));
   logEl.innerHTML = v.length ? v.map(renderLine).join('') : '<div class="msg">이 구간에는 없습니다.</div>';
   drawTL();
 }
@@ -598,7 +619,7 @@ function appendEvents(evs) {
   drawRunState();
   // 구간을 골라 둔 동안은 목록을 건드리지 않는다 — 보고 있던 게 밀려나면 안 된다.
   if (sel) return;
-  logEl.insertAdjacentHTML('beforeend', evs.map(renderLine).join(''));
+  logEl.insertAdjacentHTML('beforeend', evs.filter(shown).map(renderLine).join(''));
   while (logEl.children.length > LOG_MAX) logEl.removeChild(logEl.firstChild);
   if (atBottom) logEl.scrollTop = logEl.scrollHeight;
 }
@@ -636,7 +657,60 @@ function applySettings(next) {
 
   CFG.slow = { warn: SET.slowWarn, bad: SET.slowBad };
   CFG.appPackages = String(SET.appPackages || '').split(',').map((x) => x.trim()).filter(Boolean);
+  CFG.exclude = new Set(exclList());
   drawSettings();
+}
+
+/** 제외 목록 — 저장은 줄바꿈으로 이은 문자열 하나다. span 이름에 공백·콤마가 들어간다. */
+const exclList = () => String(SET.excludeSpans || '').split('\\n').map((x) => x.trim()).filter(Boolean);
+let exclEditing = -1;   // 수정 중인 항목 — 그동안은 다시 그리지 않는다 (입력이 날아간다)
+
+function drawExcl() {
+  if (exclEditing >= 0) return;
+  const list = exclList();
+  $('#s-excl').innerHTML = list.length
+    ? list.map((n, i) => '<div class="xi"><span class="nm" title="' + esc(n) + '">' + esc(n) + '</span>'
+        + '<button data-xedit="' + i + '">수정</button><button data-xdel="' + i + '">삭제</button></div>').join('')
+    : '<div class="none">없음</div>';
+}
+
+/** 목록을 통째로 바꿔 저장한다. 빈 값·중복은 서버가 걸러낸다. */
+function saveExcl(list) {
+  exclEditing = -1;
+  saveSettings({ excludeSpans: list.join('\\n') });
+}
+
+function addExcl() {
+  const v = $('#s-excl-new').value.trim();
+  if (!v) return;
+  $('#s-excl-new').value = '';
+  const list = exclList();
+  if (!list.includes(v)) saveExcl([...list, v]);
+}
+
+function editExcl(i) {
+  exclEditing = -1;
+  drawExcl();
+  exclEditing = i;
+  const row = $('#s-excl').children[i];
+  row.innerHTML = '<input value="' + esc(exclList()[i]) + '" autocomplete="off">'
+    + '<button data-xsave="' + i + '">저장</button><button data-xcancel="1">취소</button>';
+  const inp = row.querySelector('input');
+  inp.focus();
+  inp.select();
+}
+
+/** 수정 확정. 빈 값으로 저장하면 지운 것과 같다. */
+function commitExcl(i) {
+  const v = $('#s-excl input').value.trim();
+  const list = exclList();
+  if (v) list[i] = v; else list.splice(i, 1);
+  saveExcl(list);
+}
+
+function cancelExcl() {
+  exclEditing = -1;
+  drawExcl();
 }
 
 /** 팝오버의 현재 선택 상태를 그린다. */
@@ -654,6 +728,7 @@ function drawSettings() {
   if (document.activeElement !== $('#s-pkg')) $('#s-pkg').value = SET.appPackages ?? '';
   if (document.activeElement !== $('#s-warn')) $('#s-warn').value = SET.slowWarn;
   if (document.activeElement !== $('#s-bad')) $('#s-bad').value = SET.slowBad;
+  drawExcl();
 }
 
 /**
@@ -662,7 +737,7 @@ function drawSettings() {
  */
 async function saveSettings(patch) {
   applySettings(patch);
-  const repaint = 'slowWarn' in patch || 'slowBad' in patch || 'appPackages' in patch;
+  const repaint = 'slowWarn' in patch || 'slowBad' in patch || 'appPackages' in patch || 'excludeSpans' in patch;
   try {
     const r = await fetch(api('/api/settings', patch));
     const d = await r.json();
@@ -678,8 +753,10 @@ async function saveSettings(patch) {
 
 function openSet(on) {
   $('#setpop').classList.toggle('open', on);
+  $('#setdim').classList.toggle('open', on);
   $('#gear').classList.toggle('open', on);
-  if (on) { openPop(false); openCal(false); drawSettings(); }
+  // 열 때 남아 있던 수정 상태는 버린다 — 저장 안 한 입력이 다음에 다시 뜨면 헷갈린다.
+  if (on) { openPop(false); openCal(false); exclEditing = -1; drawSettings(); }
 }
 
 // ── 소스 (프로필 · 로그 그룹) ────────────────────────────────────────────
@@ -820,6 +897,7 @@ function drawTL() {
   let total = 0, errs = 0, picked_ = 0;
   for (const ev of all) {
     if (!Number.isFinite(ev.ts)) continue;   // 안내 줄 등은 세지 않는다
+    if (!shown(ev)) continue;                // 목록에서 숨긴 건 막대에서도 뺀다
     total += 1;
     const bad = isErr(ev);
     if (bad) errs += 1;
@@ -1246,8 +1324,11 @@ document.addEventListener('click', async (e) => {
   const t = e.target;
   const hit = (s) => t.closest(s);
 
+  // 설정은 모달이다 — 열려 있는 동안 바깥 클릭은 아무것도 하지 않는다. [닫기] 로만 닫힌다.
+  if ($('#setpop').classList.contains('open') && !hit('#setpop')) return;
+
   // 팝오버 밖을 누르면 닫는다. 트리거와 팝오버 안쪽은 빼고.
-  if (!hit('.pop') && !hit('#src') && !hit('#cal') && !hit('#gear')) { openPop(false); openCal(false); openSet(false); }
+  if (!hit('.pop') && !hit('#src') && !hit('#cal') && !hit('#gear')) { openPop(false); openCal(false); }
 
   if (t.dataset.mode) {
     mode = t.dataset.mode;
@@ -1280,6 +1361,18 @@ document.addEventListener('click', async (e) => {
     saveSettings({ intervalSec: t.dataset.int });
   } else if (t.id === 's-close') {
     openSet(false);
+  } else if (t.id === 's-excl-add') {
+    addExcl();
+  } else if (t.dataset.xedit) {
+    editExcl(Number(t.dataset.xedit));
+  } else if (t.dataset.xdel) {
+    const list = exclList();
+    list.splice(Number(t.dataset.xdel), 1);
+    saveExcl(list);
+  } else if (t.dataset.xsave) {
+    commitExcl(Number(t.dataset.xsave));
+  } else if (t.dataset.xcancel) {
+    cancelExcl();
   } else if (hit('[data-prof]')) {
     // 프로필이 바뀌면 그룹 선택은 무의미하다 — 비운다.
     profile = hit('[data-prof]').dataset.prof;
@@ -1368,12 +1461,20 @@ $('#s-bad').addEventListener('change', (e) => saveSettings({ slowBad: e.target.v
 for (const id of ['#s-pkg', '#s-warn', '#s-bad']) {
   $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); });
 }
+$('#s-excl-new').addEventListener('keydown', (e) => { if (e.key === 'Enter') addExcl(); });
+// 수정 칸은 그릴 때마다 새로 생기므로 목록에 한 번만 건다.
+$('#s-excl').addEventListener('keydown', (e) => {
+  if (e.target.tagName !== 'INPUT') return;
+  if (e.key === 'Enter') commitExcl(exclEditing);
+  else if (e.key === 'Escape') cancelExcl();
+});
 $('#term').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if ($('#srcpop').classList.contains('open') || $('#calpop').classList.contains('open')
-      || $('#setpop').classList.contains('open')) {
-    openPop(false); openCal(false); openSet(false);
+  // 설정은 [닫기] 로만 닫는다 — Esc 는 수정 취소에만 쓴다 (위에서 처리).
+  if ($('#setpop').classList.contains('open')) return;
+  if ($('#srcpop').classList.contains('open') || $('#calpop').classList.contains('open')) {
+    openPop(false); openCal(false);
   } else $('#panel').classList.remove('open');
 });
 

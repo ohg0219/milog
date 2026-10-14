@@ -20,6 +20,7 @@ const FIELDS = {
   theme: { of: ['system', 'light', 'dark'] },
   fontSize: { min: 10, max: 20 },
   appPackages: { text: true },       // 콤마 구분
+  excludeSpans: { lines: true },     // 줄바꿈 구분 — span 이름에 공백·콤마가 들어간다
   slowWarn: { min: 1, max: 600_000 },
   slowBad: { min: 1, max: 600_000 },
   tailMaxMinutes: { min: 0, max: 720 },   // 0 = 무제한
@@ -33,6 +34,7 @@ function base() {
     theme: 'system',
     fontSize: 13,
     appPackages: appPackages().join(','),
+    excludeSpans: '',
     slowWarn: slow.warn,
     slowBad: slow.bad,
     tailMaxMinutes: 60,
@@ -45,6 +47,9 @@ function clean(key, raw) {
   const f = FIELDS[key];
   if (!f || raw == null || raw === '') return undefined;
   if (f.of) return f.of.includes(raw) ? raw : undefined;
+  if (f.lines) {
+    return [...new Set(String(raw).split('\n').map((s) => s.trim()).filter(Boolean))].join('\n');
+  }
   if (f.text) {
     return String(raw).split(',').map((s) => s.trim()).filter(Boolean).join(',');
   }
@@ -57,8 +62,8 @@ function clean(key, raw) {
 export function sanitize(input = {}) {
   const out = {};
   for (const key of Object.keys(FIELDS)) {
-    // appPackages 는 '비움' 이 유효한 값이다 — 강조를 끄는 유일한 방법이라 별도로 받는다.
-    if (key === 'appPackages' && input[key] === '') { out[key] = ''; continue; }
+    // appPackages·excludeSpans 는 '비움' 이 유효한 값이다 — 끄는 유일한 방법이라 별도로 받는다.
+    if ((key === 'appPackages' || key === 'excludeSpans') && input[key] === '') { out[key] = ''; continue; }
     const v = clean(key, input[key]);
     if (v !== undefined) out[key] = v;
   }

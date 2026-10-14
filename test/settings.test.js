@@ -72,6 +72,15 @@ test('내 코드 패키지는 비울 수 있다', async () => {
   assert.equal((await s.loadSettings()).appPackages, '', '빈 값으로 되돌릴 수 있어야 한다');
 });
 
+/** span 이름엔 공백이 들어가므로 줄 단위로 나눈다. 빈 줄·중복은 걸러내고, 비울 수도 있어야 한다. */
+test('제외 span 목록은 줄 단위로 정리되고 비울 수 있다', async () => {
+  const s = await fresh();
+  await s.saveSettings({ excludeSpans: ' SELECT mitravels \n\nSELECT information_schema.replica_host_status\nSELECT mitravels' });
+  assert.equal((await s.loadSettings()).excludeSpans, 'SELECT mitravels\nSELECT information_schema.replica_host_status');
+  await s.saveSettings({ excludeSpans: '' });
+  assert.equal((await s.loadSettings()).excludeSpans, '', '빈 값으로 되돌릴 수 있어야 한다');
+});
+
 /** 파일이 깨져도 도구는 떠야 한다. */
 test('설정 파일이 망가지면 기본값으로 뜬다', async () => {
   const s = await fresh();
