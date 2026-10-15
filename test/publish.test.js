@@ -13,7 +13,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
  */
 // awsapps 는 `<조직>.awsapps.com` 같은 플레이스홀더로 문서에 정당하게 나온다.
 // 실제 하위 도메인이 박힌 경우(\w+.awsapps.com)만 잡는다.
-const FORBIDDEN = /mibank|mitravel|travelj|\w\.awsapps\.com|EEProject|간편계산|만료갱신/i;
+const FORBIDDEN = /mibank|mitravel|travelj|travelSeq|travel_seq|\w\.awsapps\.com|EEProject|간편계산|만료갱신/i;
 
 async function* walk(dir) {
   for (const e of await readdir(dir, { withFileTypes: true })) {

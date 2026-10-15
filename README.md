@@ -1,6 +1,6 @@
 # milog
 
-CloudWatch 에 JSON 한 줄로 쌓이는 로그를 **브라우저에서** 읽는다.
+CloudWatch 에 JSON 한 줄로 쌓이는 로그를 **브라우저에서** 읽는다. **AI 에이전트(MCP)도** 같은 방식으로 읽게 할 수 있다.
 Log4j2 `JsonTemplateLayout` + OpenTelemetry 규약을 알고 읽어서, 레벨·소요시간을 컬럼으로 세우고
 요청(trace)마다 색을 달리하고 span 중첩을 들여쓰기로 보여준다.
 
@@ -29,6 +29,8 @@ milog
 - **타임라인**에서 에러가 몰린 구간이 빨갛게 보이고, 끌어서 그 구간만 볼 수 있다.
 - 긴 `db.statement`·스택 트레이스·객체 덤프를 **자르지 않고** 본다.
 - 한글 로그가 안 깨진다 (AWS CLI 를 거치지 않고 SDK 로 직접 읽는다).
+- **Claude Code 같은 AI 에이전트에 붙일 수 있다** (`milog mcp`). "최근 1시간 에러 요약해줘", "이 trace 왜 느렸어?" 에
+  원본 줄 대신 **예외별로 묶은 요약과 span 트리**를 준다 — [AI 에이전트에서 쓰기](#ai-에이전트에서-쓰기-mcp).
 
 ## 요구 사항
 
@@ -62,6 +64,7 @@ milog                        브라우저에서 보기 (기본)
 milog -p my-logs -g qa-web   프로필·그룹을 미리 고른 채로 시작
 milog --port 8080 --no-open  포트 고정, 창은 직접 열기
 milog doctor                 환경 진단
+milog mcp -p my-logs -g qa-  AI 에이전트용 MCP 서버 (아래 참고)
 ```
 
 | 옵션 | 뜻 |
@@ -244,6 +247,124 @@ CloudWatch 는 **텍스트 패턴과 JSON 패턴을 한 요청에 못 섞는다.
 | `MILOG_NO_UPDATE=1` | 자동 업데이트 끄기 |
 | `MILOG_DEBUG=1` | 오류 시 스택 출력 |
 
+## AI 에이전트에서 쓰기 (MCP)
+
+`milog mcp` 는 Claude Code 같은 MCP 클라이언트가 로그를 직접 조회하게 해 주는 stdio 서버다.
+화면과 같은 로직으로 읽되, 결과는 **AI 가 읽기 좋게 줄여서** 돌려준다 — 같은 예외는 묶어서 횟수만,
+스택은 앞부분과 `Caused by`·내 코드 프레임만, trace 는 span 트리 텍스트로. 읽기 전용이다.
+
+```
+에러 314건 · 21종류 · 그룹 3개 · 1d ~ 지금
+그룹별: /app/qa-batch 300+ · /app/qa-order 10 · /app/qa-web 4
+
+[1] 91회  /app/qa-batch  10-14 22:02:30 ~ 10-15 01:04:18
+    com.acme.batch.SkipException: 외부 시스템 점검 시간입니다
+    span: RateCrawler.run
+      at com.acme.batch.RateCrawler.validate(RateCrawler.java:87)
+      …
+    trace: 6acfcfc8eb04402ef04869e9e30f981d, …
+```
+
+### 등록
+
+```bash
+milog --version     # 1.1.0 이상이어야 한다. 낮으면 npm i -g @ohg0219/milog@latest
+claude mcp add milog -- milog mcp -p my-logs -g qa-
+```
+
+`my-logs`·`qa-` 는 예시다. `-p` 는 `~/.aws/config` 의 **프로필 이름**, `-g` 는 **로그 그룹 이름 또는 조각**이다
+(`qa-` 하나로 `/app/qa-web`·`/app/qa-api` 가 다 잡힌다). 둘을 주면 **그 범위로 고정**돼서,
+AI 가 다른 계정이나 그룹으로 넘어갈 수 없다. 안 주면 호출마다 AI 가 고른다.
+
+> **1.1.0 보다 낮은 milog 로 등록하면 안 된다.** 옛 버전은 `mcp` 를 명령으로 모르고 위치 인자로 넘겨서
+> **웹 서버를 띄우고 브라우저를 연다.** stdout 에 서버 안내가 찍히니 Claude Code 에는 원인 없이
+> '연결 실패' 만 보인다. 등록 전에 `milog --version` 부터 본다.
+
+팀이 같이 쓰려면 저장소 루트의 `.mcp.json` 에 둔다:
+
+```json
+{
+  "mcpServers": {
+    "milog": { "command": "milog", "args": ["mcp", "-p", "my-logs", "-g", "qa-"] }
+  }
+}
+```
+
+**Windows** — `milog` 를 못 찾으면 `cmd /c` 로 감싼다:
+
+```bash
+claude mcp add milog -- cmd /c milog mcp -p my-logs -g qa-
+```
+
+**PowerShell 에서는 `--` 가 사라진다.** `claude` 가 npm 이 만든 `claude.ps1` 로 실행되는데,
+PowerShell 이 스크립트에 인자를 넘기면서 `--` 를 자기 문법으로 먹어 버린다. 그러면 뒤의 `-p`·`-g` 가
+claude 의 옵션으로 읽혀 `error: unknown option '-g'` 가 난다. 둘 중 하나로 피한다:
+
+```powershell
+claude.cmd mcp add milog -- milog mcp -p my-logs -g qa-     # .ps1 대신 .cmd 를 직접
+claude mcp add milog '--' milog mcp -p my-logs -g qa-       # -- 를 따옴표로 감싸기
+```
+
+### tool
+
+| tool | 하는 일 |
+|---|---|
+| `list_sources` | 프로필·로그 그룹 목록 (고정했으면 그 범위만) |
+| `find_errors` | 구간 안의 에러를 종류별로 묶어 많은 순으로. 횟수·시각·스택 앞부분·예시 trace_id |
+| `search_logs` | 검색어가 든 줄을 레벨 무관하게 시간순으로. 대소문자 구분, 콤마 = 모두 포함 |
+| `get_trace` | trace 하나를 span 트리 텍스트로. 시작 기준 오프셋·느린 span·예외 |
+
+그다음은 말로 시키면 된다 — "최근 1시간 에러 요약해줘", "주문 12345 로그 찾아줘", "이 trace 왜 느렸어?".
+보통 `find_errors` 로 무엇이 터졌는지 보고, 거기 나온 trace_id 로 `get_trace` 를 불러 원인을 좁힌다.
+
+검색과 에러를 한 tool 로 합치지 않은 이유는 화면과 같다 — [검색과 에러를 왜 섞지 않나](#검색과-에러를-왜-섞지-않나).
+
+### 어떻게 읽나
+
+**어디까지 봤는지 반드시 밝힌다.** 조용히 자르면 AI 는 받은 것을 전부로 믿는다.
+
+- **상한은 그룹마다** 건다(`find_errors` 기본 300건, `search_logs` 100건). 전체에 하나만 걸면 시끄러운 그룹이
+  상한을 다 써서 다른 그룹의 드문 에러가 통째로 사라진다(실측: 배치 하나의 예외 500건에 다른 서비스의 NPE 가 가려짐).
+  상한에 걸린 그룹은 `300+` 로 표시된다.
+- **호출 하나는 90초까지만** 돈다. 넘으면 받은 데까지 요약하고 다 못 훑은 그룹을 이름으로 밝힌다.
+  기본 구간은 1시간이고, 길수록 느리다 — 실측으로 12그룹·1일 약 55초.
+- 날짜를 콕 집지 않으면(`since` 가 `7d` 같은 상대값이고 `until` 이 없으면) **최근 쪽부터** 1시간·6시간·1일… 으로
+  거슬러 올라가며 훑는다. CloudWatch 는 오래된 쪽부터 읽기 때문에, 7일을 한 번에 주면 시간이 오래된 쪽에서
+  다 떨어져 **오늘 로그에 닿지도 못한다**(실측: 7일 0건, 같은 검색 1일 1건). 시간이 모자라면
+  `10-14 10:53 이후만 다 훑었습니다` 처럼 어디까지 봤는지 알려 준다.
+- `get_trace` 에 **32자리 trace_id 를 주면 구간이 필요 없다.** 앞 8자리가 생성 시각(epoch 초)이라
+  그 앞뒤만 찾는다 — 3일 전 trace 도 3초 안에 열린다. 그 구간에 없으면 최근 1시간에서 한 번 더 찾는다.
+- 검색어는 로그에 찍힌 모양 그대로 준다 — `"orderId":12345`(JSON 속성), `orderId=12345`(메시지).
+  원본 줄은 JSON 이라 trace_id 까지 들어 있어서, `orderId,12345` 처럼 값만 따로 주면 trace_id 에 `12345` 가 든 줄까지 걸린다.
+- span 줄에는 이름을 되풀이한 메시지(`GET /checkout, 841 ms`) 대신 `business_attributes` 전부와
+  응답 코드·`url.query`·`db.statement` 를 싣는다. 같은 `GET /checkout` 이라도 플로우 단계와 응답 코드로 구분된다.
+- 자격증명이 만료되면 tool 이 `aws sso login ...` 안내를 돌려준다. Claude Code 라면 `! aws sso login --sso-session ...` 으로 바로 실행한다.
+- **자동 업데이트를 하지 않고 알리기만 한다** — stdout 이 통신 통로라 설치·재실행이 끼어들면 연결이 깨진다.
+  새 버전이 있으면 세션의 첫 응답 끝에 한 번 `npm i -g @ohg0219/milog@latest` 안내가 붙는다(AI 가 전해 준다).
+  올린 뒤 MCP 서버를 다시 연결하면 된다. `MILOG_NO_UPDATE=1` 이면 확인도 안 한다.
+
+### 다른 CloudWatch MCP 와 무엇이 다른가
+
+AWS 의 CloudWatch MCP 서버(`awslabs.cloudwatch-mcp-server`)와 **같은 QA 로그 그룹 12개에 같은 질문**을 해 봤다
+(2026-10, 그쪽은 AI 가 쓸 법한 Logs Insights 쿼리를 직접 작성).
+
+| 질문 | cloudwatch-mcp-server | milog mcp |
+|---|---|---|
+| 1일 에러 요약 — 포맷을 모르는 쿼리 | 13초 · **205 KB** · 상위가 INFO 줄('error' 단어만 있어도 걸림) | 55초 · 11.6 KB |
+| 1일 에러 요약 — 포맷을 아는 집계 쿼리 | **11초** · 21 KB · 결과는 milog 와 같음 | (위와 같음) |
+| 3일 전 trace 열기 | 16초 · 4.5 GB 스캔 · 시간순 평면 목록(UTC) | **3초** · span 트리 · 예외·스택 |
+| 도구 스키마 (대화마다 차지) | 19개 · 90,703자 | 4개 · 3,534자 |
+| 조회 API · 비용 | Logs Insights · 스캔 GB 과금(질문당 약 1.6 GB) | FilterLogEvents · 스캔 과금 없음 |
+
+- **넓은 구간 집계는 그쪽이 빠르고 강하다.** Logs Insights 가 서버에서 병렬로 훑는다. 시간대별·엔드포인트별
+  통계 같은 질문, 메트릭·알람은 그쪽 몫이다.
+- **milog 는 AI 가 이 로그 포맷과 쿼리 언어를 몰라도 된다.** 그쪽도 쿼리만 잘 쓰면 에러 요약 품질은 같지만,
+  그러려면 AI 가 `span_exception`·`context_map` 같은 구조를 알아야 한다. trace 를 트리로 읽는 건 milog 만 한다.
+- 그래서 **대체가 아니라 같이 붙이는 것**이 맞다 — 인프라·집계는 CloudWatch MCP, 이 포맷의 앱 로그 해석은 milog.
+
+범용 AWS MCP 서버(API 를 직접 부르는 쪽)로 `"ERROR"` 텍스트 검색을 했을 때는 결과의 20% 가 WARN 이었고,
+한 그룹이 경고 없이 1,000건에서 잘렸다.
+
 ## 자동 업데이트
 
 실행할 때마다 최신 버전을 확인하고, 새 게 있으면 **시작하기 전에** 설치한다.
@@ -265,6 +386,7 @@ $ milog
 **이때 npm 레지스트리에 통신한다.** 그 외에는 AWS 하고만 통신한다. 끄려면 `MILOG_NO_UPDATE=1`.
 아래 경우에는 **확인조차 하지 않는다** — CI(`CI` 환경변수), 터미널이 아닐 때,
 npm 전역 설치본이 아닐 때(소스에서 직접 실행 중일 때).
+`milog mcp` 는 예외로 **확인은 하되 설치하지 않고 알리기만** 한다 ([MCP](#ai-에이전트에서-쓰기-mcp) 참고).
 
 게시자가 바뀌면 설치하지 않고 경고만 한다 — 공동 관리자가 추가되거나 소유권이 넘어간 경우를 막는다.
 
@@ -283,10 +405,22 @@ npm 전역 설치본이 아닐 때(소스에서 직접 실행 중일 때).
 로그가 안 쌓이면 '실시간' 이 아니기 때문이다. '켜둔 채 잊기' 는 **60분 자동 정지**가 막는다.
 접속이 없는 채로 `--idle-minutes` 가 지나면 서버도 스스로 종료한다.
 
+`milog mcp` 는 포트를 열지 않는다 — 등록한 MCP 클라이언트의 자식 프로세스로 돌고 stdin/stdout 으로만 말한다.
+
+- **읽기 전용** — 로그를 읽는 API 만 부른다
+- **`-p`·`-g` 로 범위 고정** — AI 가 그 밖의 계정·로그 그룹을 요청하면 거부한다
+- **AI 에게 주는 것도 화면과 같은 규칙으로 거른다** — DB span 의 접속 문자열·내부 엔드포인트(`db.connection_string`,
+  `server.address`)는 싣지 않는다. 단 `business_attributes` 는 전부 싣는다(개발자가 일부러 남긴 값이다).
+  거기에 IP·요청 본문이 있으면 그대로 AI 에게 간다 — 운영 로그에 붙일 때는 이 점을 감안한다
+
 ## 비용
 
 조회에 쓰는 `FilterLogEvents` 는 **요청당 과금이 없고**, 서버측에서 거른 뒤 매치만 전송된다.
 스캔량이 아니라 **전송량(GB)** 이 비용이다 — 화면 하단에 요청 수·이벤트 수·수신량이 계속 뜬다.
+`milog mcp` 도 같은 API 를 쓰고, 응답 끝에 `(CloudWatch 요청 13회 · 5.9 KB)` 처럼 사용량을 적는다.
+
+Logs Insights 는 쓰지 않는다. Logs Insights 는 **스캔한 GB 만큼** 과금된다 — 실측으로 QA 그룹 12개 하루치
+에러를 한 번 물으면 약 1.6 GB 를 스캔했다. 넓은 구간을 훨씬 빨리 훑는 대신 질문마다 돈이 든다.
 
 ## 개발
 
@@ -296,7 +430,15 @@ npm test
 node bin/milog.js --help
 ```
 
-의존성은 AWS SDK 세 개뿐이고 개발 의존성은 없다 (테스트는 Node 내장 `node --test`).
+의존성은 AWS SDK 세 개와 MCP 서버용 두 개(`@modelcontextprotocol/sdk`, `zod`)뿐이고 개발 의존성은 없다
+(테스트는 Node 내장 `node --test`).
+
+MCP 를 고치면서 Claude Code 로 바로 써 보려면 전역 설치본 대신 저장소 코드를 등록한다.
+코드를 고친 뒤 `/mcp` 에서 다시 연결하면 반영된다:
+
+```bash
+claude mcp add milog-dev -- node <저장소 경로>/bin/milog.js mcp -p my-logs -g qa-
+```
 
 ## License
 

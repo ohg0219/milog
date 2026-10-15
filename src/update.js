@@ -90,6 +90,19 @@ async function getLatest() {
   return rec;
 }
 
+/**
+ * mcp 용 — **설치하지 않고** 새 버전이 있는지만 본다.
+ *
+ * mcp 모드는 stdout 이 통신 통로라 설치·재실행을 못 한다. 그런데 이걸로만 쓰는 사람은
+ * 터미널에서 milog 를 띄울 일이 없어 영영 옛 버전에 머문다 — 그래서 알리기라도 한다.
+ */
+export async function newerVersion() {
+  if (process.env.MILOG_NO_UPDATE === '1' || process.env.CI) return null;
+  const current = await version();
+  const latest = await getLatest();
+  return latest?.version && isNewer(latest.version, current) ? { current, latest: latest.version } : null;
+}
+
 /** doctor 용 — 상태와 무관하게 최신 버전만 알고 싶을 때. */
 export async function latestVersion() {
   return (await getLatest())?.version ?? null;

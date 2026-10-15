@@ -2,7 +2,7 @@
  * 옵션 스펙. parseArgs 의 options 로 그대로 넘기고, 동시에 help 와
  * 타입 변환(coerce)의 근거로도 쓴다.
  *
- * 이 도구는 브라우저에서 보는 게 전부다 — 조회 조건·출력 형식은 전부 화면에서 고르므로
+ * 조회 조건·출력 형식은 화면(web) 이나 AI 의 tool 인자(mcp) 에서 고르므로
  * 명령줄에는 **서버를 어떻게 띄울지**와 **어디를 볼지**만 남긴다.
  */
 const opt = (type, short, desc, meta = {}) => ({ type, short, desc, ...meta });
@@ -30,6 +30,11 @@ export const COMMANDS = {
   },
   doctor: {
     summary: '환경 진단 (버전·Node·자격증명·터미널)',
+    opts: {},
+    defaults: {},
+  },
+  mcp: {
+    summary: 'AI 에이전트용 MCP 서버 (stdio). -p/-g 를 주면 그 범위로 고정',
     opts: {},
     defaults: {},
   },

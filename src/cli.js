@@ -7,8 +7,9 @@ import { version } from './version.js';
 
 import { web } from './commands/web.js';
 import { doctor } from './commands/doctor.js';
+import { mcp } from './commands/mcp.js';
 
-const HANDLERS = { web, doctor };
+const HANDLERS = { web, doctor, mcp };
 
 export async function main(argv) {
   installEpipeGuard();
@@ -36,7 +37,8 @@ export async function main(argv) {
 
   // 업데이트는 **명령을 시작하기 전에** 처리한다. 주 명령이 웹 서버라 Ctrl+C 로만
   // 끝나는데, 종료 시점에 걸어 두면 강제 종료 타이머에 잘려 영영 안 돈다.
-  await maybeAutoUpdate();
+  // mcp 는 stdout 이 JSON-RPC 통로다. 업데이트 후 재실행(stdio 상속)이 끼어들면 연결이 깨진다.
+  if (name !== 'mcp') await maybeAutoUpdate();
 
   // Ctrl+C 는 이 도구의 정상 종료 경로다 (웹 서버를 그렇게 끈다).
   // 서버가 정리될 수 있게 abort 로 협조적으로 내려간다.
