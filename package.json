@@ -1,6 +1,6 @@
 {
   "name": "@ohg0219/milog",
-  "version": "1.0.10",
+  "version": "1.1.0",
   "description": "Browse structured CloudWatch JSON logs in your browser — OpenTelemetry spans, trace trees, and error timelines. Also an MCP server for AI agents.",
   "author": "hayden",
   "keywords": [
